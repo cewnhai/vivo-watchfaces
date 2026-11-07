@@ -17,7 +17,8 @@
 
 图片说明：GitHub 的文件推送接口只接受 UTF-8 文本，png 二进制进不了仓库，
 所以图片以 base64 文本（`*.b64`）形式入库；构建前先跑
-`bash tools/decode_assets.sh` 还原成 png（本地已有 png 时跳过）。
+`bash tools/decode_assets.sh` 还原成 png（本地已有 png 时跳过），
+还原后删掉 .b64，不让它打进 .rpk。
 改完图片后用 `bash tools/encode_assets.sh` 重新生成 .b64。
 
 ## 本地构建
