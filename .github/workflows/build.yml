@@ -1,0 +1,74 @@
+name: Build watchfaces
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install 7z
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Restore toolchain cache
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/blueos-toolchain
+          key: blueos-studio-2.2.1
+
+      - name: Download BlueOS Studio dmg
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/blueos-toolchain
+          cd ~/blueos-toolchain
+          UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+          curl -L -A "$UA" -e "https://studio.blueos.com.cn/install" \
+            -o blueos-m1.dmg \
+            "https://ide-extensionstatic.vivo.com.cn/ide-extension/blue-os-studio-m1-2.2.1.dmg"
+
+      - name: Extract toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          cd ~/blueos-toolchain
+          7z x blueos-m1.dmg "BlueOS Studio Installer/BlueOS Studio.app/Contents/Resources/app/extensions/blueos-debugger/node_modules/*" -obpfull -y
+
+      - name: Prepare jax (Linux native packages + wrapper)
+        run: |
+          BP="$HOME/blueos-toolchain/bpfull/BlueOS Studio Installer/BlueOS Studio.app/Contents/Resources/app/extensions/blueos-debugger/node_modules"
+          if [ ! -d "$BP/@esbuild/linux-x64" ] || [ ! -d "$BP/@rollup/rollup-linux-x64-gnu" ]; then
+            ESBUILD_VER=$(BP="$BP" node -p "require(process.env.BP + '/esbuild/package.json').version")
+            ROLLUP_VER=$(BP="$BP" node -p "require(process.env.BP + '/rollup/package.json').version")
+            mkdir -p /tmp/native-pkgs && cd /tmp/native-pkgs && npm init -y >/dev/null 2>&1
+            npm i --ignore-scripts --no-audit --no-fund "@esbuild/linux-x64@$ESBUILD_VER" "@rollup/rollup-linux-x64-gnu@$ROLLUP_VER"
+            cp -r node_modules/@esbuild/linux-x64 "$BP/@esbuild/"
+            cp -r node_modules/@rollup/rollup-linux-x64-gnu "$BP/@rollup/"
+          fi
+          mkdir -p ~/blueos-toolchain/bin
+          cat > ~/blueos-toolchain/bin/jax <<'EOF'
+          #!/usr/bin/env bash
+          exec node "$HOME/blueos-toolchain/bpfull/BlueOS Studio Installer/BlueOS Studio.app/Contents/Resources/app/extensions/blueos-debugger/node_modules/blueos-pack/bin/index.js" "$@"
+          EOF
+          chmod +x ~/blueos-toolchain/bin/jax
+          ~/blueos-toolchain/bin/jax --help
+
+      - name: Decode image assets
+        run: bash tools/decode_assets.sh
+
+      - name: Build all watchfaces
+        run: JAX=$HOME/blueos-toolchain/bin/jax bash tools/build.sh
+
+      - name: Upload rpk artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchfaces-rpk
+          path: faces/*/dist/**/*.rpk
+          if-no-files-found: error
