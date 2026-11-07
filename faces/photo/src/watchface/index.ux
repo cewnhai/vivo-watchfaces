@@ -1,0 +1,136 @@
+<template>
+  <stack class="wrap">
+    <!-- 正常表盘：照片底图 + 白色大数字时间 -->
+    <stack class="container" show="{{screenStatus !== 'aod'}}">
+      <image class="bg" src="/assets/images/bg.png"></image>
+      <text class="time-shadow">{{hh}}:{{mm}}</text>
+      <text class="time">{{hh}}:{{mm}}</text>
+      <div class="capsule"></div>
+      <text class="capsule-text">{{month}}月{{day}}日 {{weekday}} · {{stepsText}} 步 · {{batteryText}}</text>
+    </stack>
+    <!-- AOD：纯黑底 + 时间 -->
+    <stack class="container" show="{{screenStatus === 'aod'}}">
+      <div class="aod-bg"></div>
+      <text class="aod-time">{{hh}}:{{mm}}</text>
+    </stack>
+  </stack>
+</template>
+
+<style>
+  .wrap { flex-direction: column; justify-content: center; align-items: center; width: 432px; height: 514px; background-color: #000000; }
+  .container { width: 432px; height: 514px; flex-direction: column; justify-content: center; align-items: center; }
+  .bg { position: absolute; left: 0px; top: 0px; width: 432px; height: 514px; }
+  .time-shadow { position: absolute; left: 2px; top: 102px; width: 432px; height: 100px; color: #000000; font-size: 100px; font-family: Fliptime-Linear-C-regular; text-align: center; opacity: 0.5; }
+  .time { position: absolute; left: 0px; top: 100px; width: 432px; height: 100px; color: #ffffff; font-size: 100px; font-family: Fliptime-Linear-C-regular; text-align: center; }
+  .capsule { position: absolute; left: 46px; top: 420px; width: 340px; height: 56px; background-color: #000000; opacity: 0.45; border-radius: 28px; }
+  .capsule-text { position: absolute; left: 46px; top: 434px; width: 340px; height: 28px; color: #ffffff; font-size: 20px; font-family: vivo-Regular; text-align: center; }
+  .aod-bg { position: absolute; left: 0px; top: 0px; width: 432px; height: 514px; background-color: #000000; }
+  .aod-time { position: absolute; left: 116px; top: 229px; width: 200px; height: 55px; color: #999999; font-size: 40px; font-family: Fliptime-Linear-C-regular; text-align: center; }
+</style>
+
+<script>
+import event from '@system.event'
+import storage from '@system.storage'
+import battery from '@system.battery'
+import health from '@service.health'
+
+export default {
+  data: {
+    screenStatus: 'on',
+    is24Hour: true,
+    _subs: [],
+    _hidden: false,
+    hh: '00',
+    mm: '00',
+    month: 1,
+    day: 1,
+    weekday: '周日',
+    stepsText: '--',
+    batteryText: '--'
+  },
+
+  onInit() {
+    this.readTimeFormat()
+    this.refreshAll()
+    this.sub('usual.event.TIME_TICK', () => this.refreshAll())
+    this.sub('usual.event.DATE_CHANGED', () => this.refreshAll())
+    this.sub('usual.event.TIME_FORMAT', () => { this.readTimeFormat(); this.refreshAll() })
+    this.sub('usual.event.SCREEN_AOD', () => this.enterAod())
+    this.sub('usual.event.SCREEN_ON', () => this.exitAod())
+    this.sub('usual.event.SCREEN_OFF', () => this.onScreenOff())
+    this.sub('usual.event.BATTERY_CHANGED', () => this.refreshBattery())
+    // 本表盘不显示秒，不跑每秒定时器，只靠系统事件刷新，省电
+  },
+  onReady() { this.refreshAll() },
+  onShow() { this._hidden = false; this.refreshAll() },
+  onHide() { this._hidden = true },
+  onScreenAod() { this.enterAod() },
+  onScreenOn() { this.exitAod() },
+  onScreenOff() { this.screenStatus = 'off' },
+  enterAod() { this.screenStatus = 'aod' },
+  exitAod() { this.screenStatus = 'on'; this.refreshAll() },
+  onDestroy() {
+    try { (this._subs || []).forEach((id) => event.unsubscribe({ id })) } catch (e) {}
+  },
+
+  sub(name, cb) {
+    try {
+      var id = event.subscribe({ eventName: name, callback: cb })
+      if (typeof id === 'number') this._subs.push(id)
+    } catch (e) {}
+  },
+
+  readTimeFormat() {
+    try {
+      var v = storage.getSync({ key: 'settings.TIME_FORMAT', global: true })
+      if (v != null && v !== '') this.is24Hour = (v == 1)
+    } catch (e) {}
+  },
+
+  refreshAll() {
+    this.refreshTime()
+    this.refreshBattery()
+    this.refreshHealth()
+  },
+
+  refreshTime() {
+    var t = new Date()
+    var p2 = function (n) { return n < 10 ? '0' + n : '' + n }
+    var H = t.getHours(), Mi = t.getMinutes()
+    var is24 = this.is24Hour !== false
+    var h12 = H % 12
+    if (h12 === 0) h12 = 12
+    this.hh = p2(is24 ? H : h12)
+    this.mm = p2(Mi)
+    this.month = t.getMonth() + 1
+    this.day = t.getDate()
+    this.weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][t.getDay()]
+  },
+
+  refreshBattery() {
+    try {
+      var bs = battery.getStatusSync()
+      if (bs && bs.level != null) this.batteryText = Math.round(bs.level * 100) + '%'
+    } catch (e) {}
+  },
+
+  refreshHealth() {
+    try {
+      if (!health || typeof health.getStepCount !== 'function') return
+      var self = this
+      var p = health.getStepCount()
+      if (p && typeof p.then === 'function') {
+        p.then(function (res) {
+          try {
+            var n = res && (res.stepCount != null ? res.stepCount : res.today)
+            if (n != null) self.stepsText = '' + Math.round(n)
+          } catch (e) {}
+        }).catch(function () {})
+      } else if (p && typeof p === 'object') {
+        var n2 = p.stepCount != null ? p.stepCount : p.today
+        if (n2 != null) this.stepsText = '' + Math.round(n2)
+      }
+    } catch (e) {}
+  }
+}
+</script>

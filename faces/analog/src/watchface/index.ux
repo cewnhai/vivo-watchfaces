@@ -1,0 +1,189 @@
+<template>
+  <stack class="wrap">
+    <!-- 正常表盘 -->
+    <stack class="container" show="{{screenStatus !== 'aod'}}">
+      <image class="dial" src="/assets/images/dial.png"></image>
+      <text class="date">{{month}}月{{day}}日 {{weekday}}</text>
+      <div class="hand-box" style="transform: {{hourTf}}">
+        <div class="hand-hour"></div>
+      </div>
+      <div class="hand-box" style="transform: {{minTf}}">
+        <div class="hand-min"></div>
+      </div>
+      <div class="hand-box" style="transform: {{secTf}}">
+        <div class="hand-sec"></div>
+      </div>
+      <div class="dot"></div>
+      <text class="info">{{stepsText}} 步 · {{batteryText}}</text>
+    </stack>
+    <!-- AOD：只留时分针 + 数字时间，变暗 -->
+    <stack class="container" show="{{screenStatus === 'aod'}}">
+      <image class="dial-dim" src="/assets/images/dial.png"></image>
+      <div class="hand-box" style="transform: {{hourTf}}">
+        <div class="hand-hour-dim"></div>
+      </div>
+      <div class="hand-box" style="transform: {{minTf}}">
+        <div class="hand-min-dim"></div>
+      </div>
+      <text class="aod-time">{{hh}}:{{mm}}</text>
+    </stack>
+  </stack>
+</template>
+
+<style>
+  .wrap { flex-direction: column; justify-content: center; align-items: center; width: 432px; height: 514px; background-color: #000000; }
+  .container { width: 432px; height: 514px; flex-direction: column; justify-content: center; align-items: center; }
+  .dial { position: absolute; left: 0px; top: 0px; width: 432px; height: 514px; }
+  .dial-dim { position: absolute; left: 0px; top: 0px; width: 432px; height: 514px; opacity: 0.45; }
+  .date { position: absolute; left: 66px; top: 30px; width: 300px; height: 30px; color: #cccccc; font-size: 24px; font-family: vivoSansSC600; text-align: center; }
+  .hand-box { position: absolute; left: 36px; top: 77px; width: 360px; height: 360px; transform-origin: 180px 180px; }
+  .hand-hour { position: absolute; left: 175px; top: 80px; width: 10px; height: 100px; background-color: #ffffff; border-radius: 5px; }
+  .hand-min { position: absolute; left: 176px; top: 40px; width: 8px; height: 140px; background-color: #ffffff; border-radius: 4px; }
+  .hand-sec { position: absolute; left: 178px; top: 25px; width: 4px; height: 155px; background-color: #ff3b30; border-radius: 2px; }
+  .hand-hour-dim { position: absolute; left: 175px; top: 80px; width: 10px; height: 100px; background-color: #999999; border-radius: 5px; }
+  .hand-min-dim { position: absolute; left: 176px; top: 40px; width: 8px; height: 140px; background-color: #999999; border-radius: 4px; }
+  .dot { position: absolute; left: 208px; top: 249px; width: 16px; height: 16px; background-color: #ffffff; border-radius: 8px; }
+  .info { position: absolute; left: 66px; top: 451px; width: 300px; height: 28px; color: #cccccc; font-size: 22px; font-family: vivo-Regular; text-align: center; }
+  .aod-time { position: absolute; left: 116px; top: 330px; width: 200px; height: 55px; color: #999999; font-size: 40px; font-family: Fliptime-Linear-C-regular; text-align: center; }
+</style>
+
+<script>
+import event from '@system.event'
+import storage from '@system.storage'
+import battery from '@system.battery'
+import health from '@service.health'
+
+export default {
+  data: {
+    screenStatus: 'on',
+    is24Hour: true,
+    _subs: [],
+    _tick: null,
+    _hidden: false,
+    hh: '00',
+    mm: '00',
+    ss: '00',
+    month: 1,
+    day: 1,
+    weekday: '周日',
+    hourTf: 'rotate(0deg)',
+    minTf: 'rotate(0deg)',
+    secTf: 'rotate(0deg)',
+    stepsText: '--',
+    batteryText: '--'
+  },
+
+  onInit() {
+    this.readTimeFormat()
+    this.refreshAll()
+    this.sub('usual.event.TIME_TICK', () => this.refreshAll())
+    this.sub('usual.event.DATE_CHANGED', () => this.refreshAll())
+    this.sub('usual.event.TIME_FORMAT', () => { this.readTimeFormat(); this.refreshAll() })
+    this.sub('usual.event.SCREEN_AOD', () => this.enterAod())
+    this.sub('usual.event.SCREEN_ON', () => this.exitAod())
+    this.sub('usual.event.SCREEN_OFF', () => this.onScreenOff())
+    this.sub('usual.event.BATTERY_CHANGED', () => this.refreshBattery())
+    this.startSec()
+  },
+  onReady() { this.refreshAll() },
+  onShow() { this._hidden = false; this.refreshAll(); this.startSec() },
+  onHide() { this._hidden = true; this.stopSec() },
+  onScreenAod() { this.enterAod() },
+  onScreenOn() { this.exitAod() },
+  onScreenOff() { this.screenStatus = 'off'; this.stopSec() },
+  enterAod() { this.screenStatus = 'aod'; this.stopSec() },
+  exitAod() { this.screenStatus = 'on'; this.refreshAll(); this.startSec() },
+  onDestroy() {
+    try { (this._subs || []).forEach((id) => event.unsubscribe({ id })) } catch (e) {}
+    this.stopSec()
+  },
+
+  sub(name, cb) {
+    try {
+      var id = event.subscribe({ eventName: name, callback: cb })
+      if (typeof id === 'number') this._subs.push(id)
+    } catch (e) {}
+  },
+
+  startSec() {
+    this.stopSec()
+    if (this.screenStatus === 'on' && !this._hidden) this.scheduleSec()
+  },
+  scheduleSec() {
+    if (this.screenStatus !== 'on' || this._hidden) return
+    try {
+      var ms = (new Date()).getMilliseconds()
+      var wait = 1000 - ms
+      var self = this
+      this._tick = setTimeout(function () {
+        self._tick = null
+        self.refreshTime()
+        self.scheduleSec()
+      }, wait)
+    } catch (e) {}
+  },
+  stopSec() {
+    try {
+      if (this._tick != null) { clearTimeout(this._tick); this._tick = null }
+    } catch (e) {}
+  },
+
+  readTimeFormat() {
+    try {
+      var v = storage.getSync({ key: 'settings.TIME_FORMAT', global: true })
+      if (v != null && v !== '') this.is24Hour = (v == 1)
+    } catch (e) {}
+  },
+
+  refreshAll() {
+    this.refreshTime()
+    this.refreshBattery()
+    this.refreshHealth()
+  },
+
+  refreshTime() {
+    var t = new Date()
+    var p2 = function (n) { return n < 10 ? '0' + n : '' + n }
+    var H = t.getHours(), Mi = t.getMinutes(), S = t.getSeconds()
+    var is24 = this.is24Hour !== false
+    var h12 = H % 12
+    if (h12 === 0) h12 = 12
+    this.hh = p2(is24 ? H : h12)
+    this.mm = p2(Mi)
+    this.ss = p2(S)
+    this.month = t.getMonth() + 1
+    this.day = t.getDate()
+    this.weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][t.getDay()]
+    // 指针图片/方块本身朝上（12 点方向），0 度即指向上，无需偏移
+    this.hourTf = 'rotate(' + ((H % 12) * 30 + Mi * 0.5) + 'deg)'
+    this.minTf = 'rotate(' + (Mi * 6 + S * 0.1) + 'deg)'
+    this.secTf = 'rotate(' + (S * 6) + 'deg)'
+  },
+
+  refreshBattery() {
+    try {
+      var bs = battery.getStatusSync()
+      if (bs && bs.level != null) this.batteryText = Math.round(bs.level * 100) + '%'
+    } catch (e) {}
+  },
+
+  refreshHealth() {
+    try {
+      if (!health || typeof health.getStepCount !== 'function') return
+      var self = this
+      var p = health.getStepCount()
+      if (p && typeof p.then === 'function') {
+        p.then(function (res) {
+          try {
+            var n = res && (res.stepCount != null ? res.stepCount : res.today)
+            if (n != null) self.stepsText = '' + Math.round(n)
+          } catch (e) {}
+        }).catch(function () {})
+      } else if (p && typeof p === 'object') {
+        var n2 = p.stepCount != null ? p.stepCount : p.today
+        if (n2 != null) this.stepsText = '' + Math.round(n2)
+      }
+    } catch (e) {}
+  }
+}
+</script>

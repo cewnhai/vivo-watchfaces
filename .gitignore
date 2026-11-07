@@ -1,0 +1,7 @@
+faces/*/dist/
+faces/*/build/
+faces/analog/src/watchface/assets/images/dial.png
+faces/analog/src/assets/images/preview.png
+faces/digital/src/assets/images/preview.png
+faces/photo/src/assets/images/preview.png
+faces/photo/src/watchface/assets/images/bg.png

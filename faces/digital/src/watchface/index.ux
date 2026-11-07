@@ -1,0 +1,178 @@
+<template>
+  <stack class="wrap">
+    <!-- 正常表盘 -->
+    <stack class="container" show="{{screenStatus !== 'aod'}}">
+      <text class="sec">{{ss}}</text>
+      <text class="time">{{hh}}:{{mm}}</text>
+      <text class="date">{{month}}月{{day}}日 {{weekday}}</text>
+      <text class="info">{{stepsText}} 步 · {{heartRateText}} 心率 · {{batteryText}} 电量</text>
+      <progress class="ring" type="arc" percent="{{stepPercent}}" stroke-width="6" color="#4da3ff" layer-color="#333333"></progress>
+      <text class="ring-text">{{stepPercent}}%</text>
+    </stack>
+    <!-- AOD：只留时间 -->
+    <stack class="container" show="{{screenStatus === 'aod'}}">
+      <text class="aod-time">{{hh}}:{{mm}}</text>
+    </stack>
+  </stack>
+</template>
+
+<style>
+  .wrap { flex-direction: column; justify-content: center; align-items: center; width: 432px; height: 514px; background-color: #000000; }
+  .container { width: 432px; height: 514px; flex-direction: column; justify-content: center; align-items: center; }
+  .sec { position: absolute; left: 344px; top: 56px; width: 48px; height: 34px; color: #888888; font-size: 28px; font-family: vivo-Regular; text-align: right; }
+  .time { position: absolute; left: 0px; top: 115px; width: 432px; height: 110px; color: #ffffff; font-size: 100px; font-family: Fliptime-Linear-C-regular; text-align: center; }
+  .date { position: absolute; left: 66px; top: 262px; width: 300px; height: 32px; color: #cccccc; font-size: 26px; font-family: vivoSansSC600; text-align: center; }
+  .info { position: absolute; left: 36px; top: 314px; width: 360px; height: 28px; color: #cccccc; font-size: 22px; font-family: vivo-Regular; text-align: center; }
+  .ring { position: absolute; left: 156px; top: 358px; width: 120px; height: 120px; }
+  .ring-text { position: absolute; left: 156px; top: 398px; width: 120px; height: 40px; color: #ffffff; font-size: 22px; font-family: vivo-Regular; text-align: center; }
+  .aod-time { position: absolute; left: 66px; top: 201px; width: 300px; height: 112px; color: #999999; font-size: 100px; font-family: Fliptime-Linear-C-regular; text-align: center; }
+</style>
+
+<script>
+import event from '@system.event'
+import storage from '@system.storage'
+import battery from '@system.battery'
+import health from '@service.health'
+
+export default {
+  data: {
+    screenStatus: 'on',
+    is24Hour: true,
+    _subs: [],
+    _tick: null,
+    _hidden: false,
+    hh: '00',
+    mm: '00',
+    ss: '00',
+    month: 1,
+    day: 1,
+    weekday: '周日',
+    stepsText: '--',
+    heartRateText: '--',
+    batteryText: '--',
+    stepPercent: 0
+  },
+
+  onInit() {
+    this.readTimeFormat()
+    this.refreshAll()
+    this.sub('usual.event.TIME_TICK', () => this.refreshAll())
+    this.sub('usual.event.DATE_CHANGED', () => this.refreshAll())
+    this.sub('usual.event.TIME_FORMAT', () => { this.readTimeFormat(); this.refreshAll() })
+    this.sub('usual.event.SCREEN_AOD', () => this.enterAod())
+    this.sub('usual.event.SCREEN_ON', () => this.exitAod())
+    this.sub('usual.event.SCREEN_OFF', () => this.onScreenOff())
+    this.sub('usual.event.BATTERY_CHANGED', () => this.refreshBattery())
+    this.startSec()
+  },
+  onReady() { this.refreshAll() },
+  onShow() { this._hidden = false; this.refreshAll(); this.startSec() },
+  onHide() { this._hidden = true; this.stopSec() },
+  onScreenAod() { this.enterAod() },
+  onScreenOn() { this.exitAod() },
+  onScreenOff() { this.screenStatus = 'off'; this.stopSec() },
+  enterAod() { this.screenStatus = 'aod'; this.stopSec() },
+  exitAod() { this.screenStatus = 'on'; this.refreshAll(); this.startSec() },
+  onDestroy() {
+    try { (this._subs || []).forEach((id) => event.unsubscribe({ id })) } catch (e) {}
+    this.stopSec()
+  },
+
+  sub(name, cb) {
+    try {
+      var id = event.subscribe({ eventName: name, callback: cb })
+      if (typeof id === 'number') this._subs.push(id)
+    } catch (e) {}
+  },
+
+  startSec() {
+    this.stopSec()
+    if (this.screenStatus === 'on' && !this._hidden) this.scheduleSec()
+  },
+  scheduleSec() {
+    if (this.screenStatus !== 'on' || this._hidden) return
+    try {
+      var ms = (new Date()).getMilliseconds()
+      var wait = 1000 - ms
+      var self = this
+      this._tick = setTimeout(function () {
+        self._tick = null
+        self.refreshTime()
+        self.scheduleSec()
+      }, wait)
+    } catch (e) {}
+  },
+  stopSec() {
+    try {
+      if (this._tick != null) { clearTimeout(this._tick); this._tick = null }
+    } catch (e) {}
+  },
+
+  readTimeFormat() {
+    try {
+      var v = storage.getSync({ key: 'settings.TIME_FORMAT', global: true })
+      if (v != null && v !== '') this.is24Hour = (v == 1)
+    } catch (e) {}
+  },
+
+  refreshAll() {
+    this.refreshTime()
+    this.refreshBattery()
+    this.refreshHealth()
+  },
+
+  refreshTime() {
+    var t = new Date()
+    var p2 = function (n) { return n < 10 ? '0' + n : '' + n }
+    var H = t.getHours(), Mi = t.getMinutes(), S = t.getSeconds()
+    var is24 = this.is24Hour !== false
+    var h12 = H % 12
+    if (h12 === 0) h12 = 12
+    this.hh = p2(is24 ? H : h12)
+    this.mm = p2(Mi)
+    this.ss = p2(S)
+    this.month = t.getMonth() + 1
+    this.day = t.getDate()
+    this.weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][t.getDay()]
+  },
+
+  refreshBattery() {
+    try {
+      var bs = battery.getStatusSync()
+      if (bs && bs.level != null) this.batteryText = Math.round(bs.level * 100) + '%'
+    } catch (e) {}
+  },
+
+  refreshHealth() {
+    try {
+      if (!health) return
+      var self = this
+      if (typeof health.getStepCount === 'function') {
+        var p = health.getStepCount()
+        var setSteps = function (res) {
+          try {
+            var n = res && (res.stepCount != null ? res.stepCount : res.today)
+            if (n != null) {
+              self.stepsText = '' + Math.round(n)
+              self.stepPercent = Math.min(100, Math.round(n / 10000 * 100))
+            }
+          } catch (e) {}
+        }
+        if (p && typeof p.then === 'function') p.then(setSteps).catch(function () {})
+        else if (p && typeof p === 'object') setSteps(p)
+      }
+      if (typeof health.getHeartRate === 'function') {
+        var q = health.getHeartRate()
+        var setHr = function (res) {
+          try {
+            var hr = res && (res.heartRate != null ? res.heartRate : res.value)
+            if (hr != null) self.heartRateText = '' + Math.round(hr)
+          } catch (e) {}
+        }
+        if (q && typeof q.then === 'function') q.then(setHr).catch(function () {})
+        else if (q && typeof q === 'object') setHr(q)
+      }
+    } catch (e) {}
+  }
+}
+</script>
