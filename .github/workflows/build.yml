@@ -61,7 +61,10 @@ jobs:
           ~/blueos-toolchain/bin/jax --help
 
       - name: Decode image assets
-        run: bash tools/decode_assets.sh
+        run: |
+          bash tools/decode_assets.sh
+          # .b64 是入库用的文本形态，解出 png 后删掉，不让它打进 .rpk
+          find faces -name '*.b64' -delete
 
       - name: Build all watchfaces
         run: JAX=$HOME/blueos-toolchain/bin/jax bash tools/build.sh
